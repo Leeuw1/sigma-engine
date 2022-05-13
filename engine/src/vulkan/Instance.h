@@ -1,28 +1,36 @@
 #pragma once
 
+#include "Pipeline.h"
+#include "Swapchain.h"
+#include "Buffer.h"
 #include "base.h"
-#include "Window.h"
+
+#define GLFW_INCLUDE_VULKAN
+#include <GLFW/glfw3.h>
+#include <glm/mat4x4.hpp>
 
 #include <vector>
-#include <optional>
+#include <array>
+#include <memory>
 
 namespace sge::vulkan
 {
-	struct QueueFamilyIndices
-	{
-		std::optional<uint32_t> GraphicsFamily;
-		std::optional<uint32_t> PresentFamily;
+	constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
-		inline bool IsComplete()
-		{
-			return GraphicsFamily.has_value() && PresentFamily.has_value();
-		}
+	struct TestUniformBuffer
+	{
+		glm::mat4 transform0;
+		glm::mat4 transform1;
+		glm::mat4 transform2;
+		glm::mat4 transform3;
 	};
+	constexpr size_t UNIFORM_BUFFER_SIZE = sizeof(TestUniformBuffer);
 
 	class Instance
 	{
 	private:
 		VkInstance m_InstanceHandle;
+		GLFWwindow* m_WindowHandle;
 #ifdef SGE_USING_VALIDATION_LAYERS
 		VkDebugUtilsMessengerEXT m_DebugMessenger;
 		std::vector<const char*> m_ValidationLayers;
@@ -34,48 +42,56 @@ namespace sge::vulkan
 		VkDevice m_Device;
 		VkQueue m_GraphicsQueue;
 		VkQueue m_PresentQueue;
-
-		VkSwapchainKHR m_Swapchain;
-		std::vector<VkImage> m_SwapchainImages;
-		std::vector<VkImageView> m_SwapchainImageViews;
-		VkFormat m_SwapchainImageFormat;
-		VkExtent2D m_SwapchainExtent;
-		std::vector<VkFramebuffer> m_Framebuffers;
 		
 		VkRenderPass m_RenderPass;
 		
-		VkPipeline m_Pipeline;
-		VkPipelineLayout m_PipelineLayout;
+		Pipeline* m_Pipeline;
+		VertexBuffer* m_VertexBuffer;
+		IndexBuffer* m_IndexBuffer;
+		std::array<UniformBuffer*, MAX_FRAMES_IN_FLIGHT> m_UniformBuffers;
+		std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> m_DescriptorSetLayouts;
+		std::array<VkDescriptorSet, 2> m_DescriptorSets;
+		VkDescriptorPool m_DescriptorPool;
+		Swapchain* m_Swapchain;
 		
 		VkCommandPool m_CommandPool;
-		VkCommandBuffer m_CommandBuffer;
+		std::vector<VkCommandBuffer> m_CommandBuffers;
 
-		VkSemaphore m_ImageAvailableSemaphore;
-		VkSemaphore m_RenderFinishedSemaphore;
-		VkFence m_InFlightFence;
+		// Sync objects
+		std::vector<VkSemaphore> m_ImageAvailableSemaphores;
+		std::vector<VkSemaphore> m_RenderFinishedSemaphores;
+		std::vector<VkFence> m_InFlightFences;
+
+		uint32_t m_CurrentFrame;
+
+		glm::mat4 m_Rotation0;
+		glm::mat4 m_Rotation1;
+		glm::mat4 m_Rotation2;
+		glm::mat4 m_Rotation3;
 	private:
 		void InitInstance();
 #ifdef SGE_USING_VALIDATION_LAYERS
 		void InitDebugMessenger();
 #endif // SGE_USING_VALIDATION_LAYERS
-		void InitSurface(GLFWwindow* window);
+		void InitSurface();
 		void InitPhysicalDevice();
 		void InitLogicalDevice();
-		void InitSwapchain(GLFWwindow* window);
-		void InitImageViews();
 		void InitRenderPass();
 		void InitGraphicsPipeline();
-		void InitFramebuffers();
 		void InitCommandPool();
-		void InitCommandBuffer();
+		void InitVertexBuffer();
+		void InitUniformBuffers();
+		void InitDescriptorSets();
+		void InitCommandBuffers();
 		void InitSyncObjects();
 	private:
 		void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 	public:
 		Instance(GLFWwindow* window);
 		~Instance();
-		void Destroy();
 		void OnUpdate();
+		void UpdateUniformBuffer(uint32_t index);
+		void ReInitSwapchain();
 
 		VkShaderModule CreateShaderModule(const std::vector<char>& binary);
 	public:
@@ -84,39 +100,14 @@ namespace sge::vulkan
 		inline VkDebugUtilsMessengerEXT GetDebugMessenger() const { return m_DebugMessenger; }
 		inline const std::vector<const char*>& GetValidationLayers() const { return m_ValidationLayers; }
 #endif // SGE_USING_VALIDATION_LAYERS
+		inline void SetFramebufferResized() { m_Swapchain->SetFramebufferResized(true); }
+
+		inline GLFWwindow* GetWindowHandle() const { return m_WindowHandle; }
+		inline VkDevice GetDevice() const { return m_Device; }
+		inline VkPhysicalDevice GetPhysicalDevice() const { return m_PhysicalDevice; }
+		inline VkExtent2D GetSwapchainExtent() const { return m_Swapchain->GetExtent(); }
+		inline VkRenderPass GetRenderPass() const { return m_RenderPass; }
+		inline VkSurfaceKHR GetSurface() const { return m_Surface; }
+		inline const QueueFamilyIndices& GetQueueFamilyIndices() const { return m_QueueFamilyIndices; }
 	};
-
-	std::vector<const char*> GetRequiredExtensions();
-
-#ifdef SGE_USING_VALIDATION_LAYERS
-	static VKAPI_ATTR VkBool32 VKAPI_CALL VulkanDebugCallback(
-		VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
-		VkDebugUtilsMessageTypeFlagsEXT messageType,
-		const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
-		void* userData);
-	VkResult CreateDebugUtilsMessenger(VkInstance instance, const VkDebugUtilsMessengerCreateInfoEXT* createInfo,
-		const VkAllocationCallbacks* allocator, VkDebugUtilsMessengerEXT* debugMessenger);
-	void DestroyDebugUtilsMessenger(VkInstance instance, VkDebugUtilsMessengerEXT debugMessenger,
-		const VkAllocationCallbacks* allocator);
-	bool ValidationLayersSupported(const std::vector<const char*>& validationLayers);
-#endif // SGE_USING_VALIDATION_LAYERS
-	QueueFamilyIndices FindQueueFamilies(VkPhysicalDevice device, VkSurfaceKHR surface);
-	bool IsSuitablePhysicalDevice(VkPhysicalDevice device, VkSurfaceKHR surface,
-		const std::vector<const char*>& requiredExtensions, QueueFamilyIndices& queueFamilyIndices);
-	void ListExtensions();
-	bool CheckDeviceExtensionSupport(VkPhysicalDevice device, const std::vector<const char*>& extensions);
-
-	struct SwapchainSupportDetails
-	{
-		VkSurfaceCapabilitiesKHR Capabilities;
-		std::vector<VkSurfaceFormatKHR> Formats;
-		std::vector<VkPresentModeKHR> PresentModes;
-	};
-
-	SwapchainSupportDetails QuerySwapchainSupport(VkPhysicalDevice device, VkSurfaceKHR surface);
-	VkSurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
-	VkPresentModeKHR ChooseSwapPresentMode(const std::vector<VkPresentModeKHR>& availableModes);
-	VkExtent2D ChooseSwapExtent(const VkSurfaceCapabilitiesKHR& capabilities, GLFWwindow* window);
-
-	std::vector<char> LoadShaderBinary(const std::string& filepath);
 } // namespace sge::vulkan
