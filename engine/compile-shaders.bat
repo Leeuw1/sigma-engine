@@ -1,3 +1,4 @@
-E:/VulkanSDK/1.3.211.0/Bin/glslc.exe ./shaders/shader.vert -o ./shaders/shader.vert.spv
-E:/VulkanSDK/1.3.211.0/Bin/glslc.exe ./shaders/shader.frag -o ./shaders/shader.frag.spv
+:: First arg is Vulkan SDK directory, second arg is shaders directory
+%1/Bin/glslc.exe %2/shader.vert -o %2/shader.vert.spv
+%1/Bin/glslc.exe %2/shader.frag -o %2/shader.frag.spv
 pause
