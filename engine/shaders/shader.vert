@@ -1,21 +1,24 @@
 #version 450
 
-layout (location = 0) out vec3 out_Color;
+layout(location = 0) in vec2 v_Position;
+layout(location = 1) in vec3 v_Color;
+layout(location = 0) out vec3 out_Color;
 
-const vec2 positions[3] = {
-	vec2(0.0f, -0.5f),
-	vec2(0.5f, 0.5f),
-	vec2(-0.5f, 0.5f)
-};
+layout(push_constant) uniform PushConstant
+{
+	mat4 projection;
+}
+push;
 
-const vec3 colors[3] = {
-	vec3(1.0f, 0.0f, 0.0f),
-	vec3(0.0f, 1.0f, 0.0f),
-	vec3(0.0f, 0.0f, 1.0f)
-};
+layout(binding = 0) uniform UniformBuffer
+{
+	mat4 transforms[4];
+}
+uBuffer;
 
 void main()
 {
-	out_Color = colors[gl_VertexIndex];
-	gl_Position = vec4(positions[gl_VertexIndex], 0.0f, 1.0f);
+	out_Color = v_Color;
+	float instanceIndex = float(gl_InstanceIndex);
+	gl_Position = uBuffer.transforms[gl_InstanceIndex] * vec4(v_Position.x + instanceIndex / 4.0f, v_Position.y, 0.0f, 1.0f);
 }
