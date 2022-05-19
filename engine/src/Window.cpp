@@ -1,16 +1,20 @@
 #include "Window.h"
 #include "base.h"
 #include "event/KeyEvent.h"
+#include <vulkan/Util.h>
+
+#include <imgui/imgui.h>
 
 namespace sge
 {
+	constexpr uint32_t windowWidth = 1200, windowHeight = 900;
+	
 	Window::Window()
 	{
 		SGE_ASSERTM(glfwInit(), "Failed to initialize glfw.");
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-		constexpr uint32_t windowWidth = 800, windowHeight = 600;
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 		GLFWwindow* windowHandle = glfwCreateWindow(windowWidth, windowHeight, "Sigma Game Engine", nullptr, nullptr);
 		std::cout << "Initializing Vulkan...\n";
 		m_VulkanInstance = std::make_unique<vulkan::Instance>(windowHandle);
@@ -60,6 +64,16 @@ namespace sge
 		});
 	}
 
+	void Window::ImGuiPresent()
+	{
+		ImGuiIO& io = ImGui::GetIO();
+		if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+		{
+			ImGui::UpdatePlatformWindows();
+			ImGui::RenderPlatformWindowsDefault();
+		}
+	}
+
 	void Window::OnEvent(Event& event)
 	{
 		m_Eventcallback(event);
@@ -67,8 +81,9 @@ namespace sge
 
 	void Window::OnUpdate()
 	{
-		m_VulkanInstance->OnUpdate();
 		glfwPollEvents();
+		m_VulkanInstance->DrawFrame();
+		ImGuiPresent();
 	}
 
 	void Window::OnFrameBufferResize()
