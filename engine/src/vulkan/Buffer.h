@@ -8,6 +8,8 @@
 
 namespace sge::vulkan
 {
+	constexpr uint32_t VERTEX_ATTRIB_COUNT = 2;
+
 	class Buffer
 	{
 	protected:
@@ -34,11 +36,13 @@ namespace sge::vulkan
 
 	class VertexBuffer : public Buffer
 	{
+	private:
+		size_t m_Stride;
 	public:
-		VertexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const float* vertexData, size_t size);
+		VertexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const float* vertexData, size_t stride, size_t count);
 		void Bind(VkCommandBuffer commandBuffer);
 		VkVertexInputBindingDescription GetBindingDescription() const;
-		std::array<VkVertexInputAttributeDescription, 2> GetAttributeDescriptions() const;
+		std::array<VkVertexInputAttributeDescription, VERTEX_ATTRIB_COUNT> GetAttributeDescriptions() const;
 	};
 
 	class IndexBuffer : public Buffer

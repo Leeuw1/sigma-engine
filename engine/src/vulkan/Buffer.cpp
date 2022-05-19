@@ -43,39 +43,22 @@ namespace sge::vulkan
 
 	void Buffer::CopyBuffer(VkDevice device, VkCommandPool commandPool, VkQueue transferQueue, VkBuffer dest, VkBuffer source, size_t size)
 	{
-		VkCommandBufferAllocateInfo commandBufferInfo = {};
-		commandBufferInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-		commandBufferInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		commandBufferInfo.commandPool = commandPool;
-		commandBufferInfo.commandBufferCount = 1;
-
-		VkCommandBuffer commandBuffer;
-		if (vkAllocateCommandBuffers(device, &commandBufferInfo, &commandBuffer) != VK_SUCCESS)
-			SGE_DEBUG_BREAKM("Failed to create Vulkan command buffer.");
-
-		VkCommandBufferBeginInfo commandBeginInfo = {};
-		commandBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		VkCommandBuffer commandBuffer = BeginOneTimeCommandBuffer(device, commandPool);
 
 		VkBufferCopy bufferCopy = {};
 		bufferCopy.size = size;
 
-		vkBeginCommandBuffer(commandBuffer, &commandBeginInfo);
 		vkCmdCopyBuffer(commandBuffer, source, dest, 1, &bufferCopy);
-		vkEndCommandBuffer(commandBuffer);
-
-		VkSubmitInfo submitInfo = {};
-		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-		submitInfo.commandBufferCount = 1;
-		submitInfo.pCommandBuffers = &commandBuffer;
-
-		vkQueueSubmit(transferQueue, 1, &submitInfo, nullptr);
-		vkQueueWaitIdle(transferQueue);
+		
+		EndOneTimeCommandBuffer(device, commandPool, commandBuffer, transferQueue);
 	}
 
 	// Note: 'transferQueue' can be a graphics queue because it supports transfer operations
-	VertexBuffer::VertexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const float* vertexData, size_t size)
-		: Buffer(device, physicalDevice, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, size)
+	VertexBuffer::VertexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const float* vertexData, size_t stride, size_t count)
+		: Buffer(device, physicalDevice, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT, count * stride), m_Stride(stride)
 	{
+		size_t size = count * stride;
+
 		Buffer stagingBuffer(device, physicalDevice, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, size);
 		void* data;
 		vkMapMemory(device, stagingBuffer.GetDeviceMemory(), 0, size, 0, &data);
@@ -97,24 +80,27 @@ namespace sge::vulkan
 	{
 		VkVertexInputBindingDescription bindingDescription = {};
 		bindingDescription.binding = 0;
-		bindingDescription.stride = static_cast<uint32_t>(5 * sizeof(float));//sizeof(TestVertex);
+		//bindingDescription.stride = static_cast<uint32_t>(m_Stride);
+		bindingDescription.stride = static_cast<uint32_t>(6 * sizeof(float)); // TEMPORARY
 		bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
 		return bindingDescription;
 	}
 
-	std::array<VkVertexInputAttributeDescription, 2> VertexBuffer::GetAttributeDescriptions() const
+	std::array<VkVertexInputAttributeDescription, VERTEX_ATTRIB_COUNT> VertexBuffer::GetAttributeDescriptions() const
 	{
-		std::array<VkVertexInputAttributeDescription, 2> attributeDescriptions = {};
+		std::array<VkVertexInputAttributeDescription, VERTEX_ATTRIB_COUNT> attributeDescriptions = {};
+		// Position
 		attributeDescriptions[0].binding = 0;
 		attributeDescriptions[0].location = 0;
-		attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT;
+		attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
 		attributeDescriptions[0].offset = 0;
 
+		// Normal
 		attributeDescriptions[1].binding = 0;
 		attributeDescriptions[1].location = 1;
 		attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
-		attributeDescriptions[1].offset = 2 * sizeof(float);
+		attributeDescriptions[1].offset = 3 * sizeof(float);
 
 		return attributeDescriptions;
 	}
@@ -172,16 +158,36 @@ namespace sge::vulkan
 		vkUnmapMemory(device, m_DeviceMemory);
 	}
 
+	// TODO: Make ImGui work
 	VkDescriptorPool CreateDescriptorPool(VkDevice device, uint32_t descriptorCount)
 	{
-		VkDescriptorPoolSize poolSize = {};
-		poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-		poolSize.descriptorCount = descriptorCount;
+		descriptorCount = 1000; // testing
 
+		VkDescriptorPoolSize poolSizes[2] = {};
+		poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		poolSizes[0].descriptorCount = descriptorCount;
+		poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		poolSizes[1].descriptorCount = descriptorCount;
+		/*
+		VkDescriptorPoolSize pool_sizes[] =
+		{
+			{ VK_DESCRIPTOR_TYPE_SAMPLER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1000 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1000 },
+			{ VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1000 },
+			{ VK_DESCRIPTOR_TYPE_STORAGE_BUFFER_DYNAMIC, 1000 },
+			{ VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1000 }
+		};
+		*/
 		VkDescriptorPoolCreateInfo poolInfo = {};
 		poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-		poolInfo.poolSizeCount = 1;
-		poolInfo.pPoolSizes = &poolSize;
+		poolInfo.poolSizeCount = 2;
+		poolInfo.pPoolSizes = poolSizes;
 		poolInfo.maxSets = descriptorCount;
 
 		VkDescriptorPool descriptorPool;
