@@ -25,7 +25,6 @@ add_library(${PROJECT_NAME} SHARED
 add_custom_command(TARGET ${PROJECT_NAME}
 	POST_BUILD
 	COMMAND cmd /c ${CMAKE_CURRENT_SOURCE_DIR}/compile-shaders.bat ${VULKAN_SDK_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/shaders phong
-	#COMMAND cmd move /y ${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}.dll ${SIGMA_SHARED_LIBRARY_DIR}
 )
 
 # Subdirectories
@@ -45,6 +44,7 @@ target_include_directories(${PROJECT_NAME}
 	PUBLIC ${VENDOR_DIR}/glfw/include
 	PUBLIC ${VENDOR_DIR}/glm
 	PUBLIC ${VENDOR_DIR}/imgui
+	PUBLIC ${VENDOR_DIR}/imgui/imgui
 )
 
 target_link_directories(${PROJECT_NAME}
