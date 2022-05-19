@@ -9,8 +9,6 @@ namespace sge::vulkan
 		SwapchainSupportDetails&& supportDetails, const QueueFamilyIndices& queueFamilyIndices)
 		: m_SwapchainHandle(nullptr), m_FramebufferResized(false)
 	{
-		//SwapchainSupportDetails details = QuerySwapchainSupport(instance->GetPhysicalDevice(), instance->GetSurface());
-
 		VkSurfaceFormatKHR surfaceFormat = ChooseSurfaceFormat(supportDetails.Formats);
 		VkPresentModeKHR presentMode = ChoosePresentMode(supportDetails.PresentModes);
 		VkExtent2D extent = ChooseExtent(supportDetails.Capabilities, windowHandle);
@@ -53,7 +51,6 @@ namespace sge::vulkan
 
 	void Swapchain::Destroy(VkDevice device)
 	{
-
 		for (auto framebuffer : m_Framebuffers)
 			vkDestroyFramebuffer(device, framebuffer, nullptr);
 
@@ -74,43 +71,24 @@ namespace sge::vulkan
 	void Swapchain::InitImageViews(VkDevice device)
 	{
 		m_ImageViews.resize(m_Images.size());
+
 		for (size_t i = 0; i < m_Images.size(); i++)
-		{
-			VkImageViewCreateInfo createInfo = {};
-			createInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-			createInfo.image = m_Images[i];
-			createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-			createInfo.format = m_ImageFormat;
-
-			createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
-			createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
-
-			createInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-			createInfo.subresourceRange.baseMipLevel = 0;
-			createInfo.subresourceRange.levelCount = 1;
-			createInfo.subresourceRange.baseArrayLayer = 0;
-			createInfo.subresourceRange.layerCount = 1;
-
-			if (vkCreateImageView(device, &createInfo, nullptr, &m_ImageViews[i]) != VK_SUCCESS)
-				SGE_DEBUG_BREAKM("Failed to create Vulkan image view.");
-		}
+			m_ImageViews[i] = CreateImageView(device, m_Images[i], m_ImageFormat, VK_IMAGE_ASPECT_COLOR_BIT);
 	}
 
-	void Swapchain::InitFramebuffers(VkDevice device, VkRenderPass renderPass)
+	void Swapchain::InitFramebuffers(VkDevice device, VkRenderPass renderPass, VkImageView depthImageView)
 	{
 		m_Framebuffers.resize(m_ImageViews.size());
 
 		for (size_t i = 0; i < m_ImageViews.size(); i++)
 		{
-			VkImageView attachment = m_ImageViews[i];
+			VkImageView attachments[2] = { m_ImageViews[i], depthImageView };
 
 			VkFramebufferCreateInfo createInfo = {};
 			createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
 			createInfo.renderPass = renderPass;
-			createInfo.attachmentCount = 1;
-			createInfo.pAttachments = &attachment;
+			createInfo.attachmentCount = 2;
+			createInfo.pAttachments = attachments;
 			createInfo.width = m_Extent.width;
 			createInfo.height = m_Extent.height;
 			createInfo.layers = 1;
@@ -119,7 +97,6 @@ namespace sge::vulkan
 				SGE_DEBUG_BREAKM("Failed to create Vulkan framebuffer.");
 		}
 	}
-
 
 	VkSurfaceFormatKHR Swapchain::ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats)
 	{

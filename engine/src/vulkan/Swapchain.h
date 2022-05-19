@@ -35,7 +35,7 @@ namespace sge::vulkan
 #endif // DEBUG
 		void Destroy(VkDevice device);
 		void InitImageViews(VkDevice device);
-		void InitFramebuffers(VkDevice device, VkRenderPass renderPass);
+		void InitFramebuffers(VkDevice device, VkRenderPass renderPass, VkImageView depthImageView);
 	public:
 		inline VkSwapchainKHR GetSwapchainHandle() const { return m_SwapchainHandle; }
 		inline bool GetFramebufferResized() const { return m_FramebufferResized; }
@@ -43,6 +43,7 @@ namespace sge::vulkan
 		inline VkExtent2D GetExtent() const { return m_Extent; }
 		inline VkFramebuffer FramebufferAt(uint32_t index) const { return m_Framebuffers[index]; }
 		inline void SetFramebufferResized(bool b) { m_FramebufferResized = b; }
+		inline uint32_t GetImageCount() const { return static_cast<uint32_t>(m_Images.size()); }
 
 		VkSurfaceFormatKHR ChooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& availableFormats);
 		VkPresentModeKHR ChoosePresentMode(const std::vector<VkPresentModeKHR>& availableModes);
