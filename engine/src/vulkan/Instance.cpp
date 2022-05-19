@@ -1,9 +1,14 @@
 #include "Instance.h"
+#include "FileUtil.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <imgui/backends/imgui_impl_vulkan.h>
+
 #include <iostream>
+
+#define SGE_CALL_VERBOSE(func) func; std::cout << #func << '\n'
 
 namespace sge::vulkan
 {
@@ -15,47 +20,39 @@ namespace sge::vulkan
 		//m_Pipeline(nullptr), m_PipelineLayout(nullptr),
 		m_GraphicsQueue(nullptr), m_PresentQueue(nullptr), m_CommandPool(nullptr),
 		m_CurrentFrame(0),
-		m_Rotation0(glm::identity<glm::mat4>()),
-		m_Rotation1(glm::identity<glm::mat4>()),
-		m_Rotation2(glm::identity<glm::mat4>()),
-		m_Rotation3(glm::identity<glm::mat4>())
+		m_Rotation(glm::scale(glm::identity<glm::mat4>(), glm::vec3(5.0f, 5.0f, 5.0f))),
+		m_PushConstant({ 1.0f, 1.0f, 1.0f, 1.0f, { 0.6f, 0.0f, 0.0f } })
 	{
-		InitInstance();
-		std::cout << "Vulkan instance created.\n";
+		SGE_CALL_VERBOSE(InitInstance());
+
 #ifdef SGE_USING_VALIDATION_LAYERS
-		InitDebugMessenger();
-		std::cout << "Vulkan debug messenger created.\n";
+		SGE_CALL_VERBOSE(InitDebugMessenger());
 #endif // SGE_USING_VALIDATION_LAYERS
-		InitSurface();
-		std::cout << "Vulkan surface created.\n";
+
+		SGE_CALL_VERBOSE(InitSurface());
 		
-		InitPhysicalDevice();
-		std::cout << "Vulkan physical device created.\n";
-		InitLogicalDevice();
-		std::cout << "Vulkan logical device created.\n";
-		
+		SGE_CALL_VERBOSE(InitPhysicalDevice());
+		SGE_CALL_VERBOSE(InitLogicalDevice());
+
 		m_Swapchain = new Swapchain(m_Device, m_Surface, m_WindowHandle, QuerySwapchainSupport(m_PhysicalDevice, m_Surface), m_QueueFamilyIndices);
 		std::cout << "Vulkan swap chain created.\n";
 		m_Swapchain->InitImageViews(m_Device);
 		std::cout << "Vulkan image views created.\n";
-		InitRenderPass();
-		std::cout << "Vulkan render pass created.\n";
+		SGE_CALL_VERBOSE(InitRenderPass());
 
-		InitUniformBuffers();
-		InitDescriptorSets();
+		SGE_CALL_VERBOSE(InitCommandPool());
+		SGE_CALL_VERBOSE(InitDepthResources());
 
-		InitGraphicsPipeline();
-		std::cout << "Vulkan graphics pipeline created.\n";
-		m_Swapchain->InitFramebuffers(m_Device, m_RenderPass);
+		SGE_CALL_VERBOSE(InitVertexBuffer());
+		SGE_CALL_VERBOSE(InitUniformBuffers());
+		SGE_CALL_VERBOSE(InitDescriptorSets());
+		SGE_CALL_VERBOSE(InitGraphicsPipeline());
+
+		m_Swapchain->InitFramebuffers(m_Device, m_RenderPass, m_DepthImageView);
 		std::cout << "Vulkan framebuffers created.\n";
-		InitCommandPool();
-		std::cout << "Vulkan command pool created.\n";
-		InitVertexBuffer();
-		std::cout << "Vulkan vertex buffer created.\n";
-		InitCommandBuffers();
-		std::cout << "Vulkan command buffer created.\n";
-		InitSyncObjects();
-		std::cout << "Vulkan semaphores and fences created.\n";
+		SGE_CALL_VERBOSE(InitCommandBuffers());
+
+		SGE_CALL_VERBOSE(InitSyncObjects());
 	}
 
 	Instance::~Instance()
@@ -71,8 +68,13 @@ namespace sge::vulkan
 		m_VertexBuffer->Destroy(m_Device);
 		delete m_VertexBuffer;
 
-		m_IndexBuffer->Destroy(m_Device);
-		delete m_IndexBuffer;
+		// Depth resources
+		vkDestroyImageView(m_Device, m_DepthImageView, nullptr);
+		vkDestroyImage(m_Device, m_DepthImage, nullptr);
+		vkFreeMemory(m_Device, m_DepthImageMemory, nullptr);
+
+		//m_IndexBuffer->Destroy(m_Device);
+		//delete m_IndexBuffer;
 
 		for (auto uniformBuffer : m_UniformBuffers)
 		{
@@ -99,7 +101,7 @@ namespace sge::vulkan
 		vkDestroyInstance(m_InstanceHandle, nullptr);
 	}
 
-	void Instance::OnUpdate()
+	void Instance::DrawFrame()
 	{
 		vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
 
@@ -119,6 +121,10 @@ namespace sge::vulkan
 
 		UpdateUniformBuffer(m_CurrentFrame);
 
+		// ImGui
+		ImGui::Render();
+		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), m_CommandBuffers[m_CurrentFrame]);
+
 		VkSubmitInfo submitInfo = {};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -130,7 +136,8 @@ namespace sge::vulkan
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = &m_RenderFinishedSemaphores[m_CurrentFrame];
 
-		if (vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]) != VK_SUCCESS)
+		result = vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]);
+		if (result != VK_SUCCESS)
 			SGE_DEBUG_BREAKM("Failed to submit Vulkan draw command buffer.");
 
 		VkSwapchainKHR swapchains[] = { m_Swapchain->GetSwapchainHandle() };
@@ -308,16 +315,16 @@ namespace sge::vulkan
 		m_Pipeline->Destroy(m_Device);
 		delete m_Pipeline;
 		
+		InitCommandPool();
+		std::cout << "Vulkan command pool created.\n";
+
 		InitUniformBuffers();
 
 		InitGraphicsPipeline();
 		std::cout << "Vulkan graphics pipeline created.\n";
 		
-		//InitFramebuffers();
-		m_Swapchain->InitFramebuffers(m_Device, m_RenderPass);
+		m_Swapchain->InitFramebuffers(m_Device, m_RenderPass, m_DepthImageView);
 		std::cout << "Vulkan framebuffers created.\n";
-		InitCommandPool();
-		std::cout << "Vulkan command pool created.\n";
 		InitVertexBuffer();
 		std::cout << "Vulkan vertex buffer created.\n";
 		InitCommandBuffers();
@@ -329,9 +336,9 @@ namespace sge::vulkan
 	void Instance::InitGraphicsPipeline()
 	{
 		// Create shader stages
-		std::vector<char> vertexShaderBinary = LoadShaderBinary("E:/C++/sigma-engine/engine/shaders/shader.vert.spv");
+		std::vector<char> vertexShaderBinary = LoadShaderBinary("E:/C++/sigma-engine/engine/shaders/phong.vert.spv");
 		std::cout << "Vertex shader binary size: " << vertexShaderBinary.size() << " bytes.\n";
-		std::vector<char> fragShaderBinary = LoadShaderBinary("E:/C++/sigma-engine/engine/shaders/shader.frag.spv");
+		std::vector<char> fragShaderBinary = LoadShaderBinary("E:/C++/sigma-engine/engine/shaders/phong.frag.spv");
 		std::cout << "Fragment shader binary size: " << fragShaderBinary.size() << " bytes.\n";
 
 		VkShaderModule vertexShaderModule = CreateShaderModule(vertexShaderBinary);
@@ -359,23 +366,41 @@ namespace sge::vulkan
 		colorAttachmentRef.attachment = 0;
 		colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
+		VkAttachmentDescription depthAttachment = {};
+		depthAttachment.format = FindDepthFormat(m_PhysicalDevice);
+		depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+		depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+		//depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+		depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+		VkAttachmentReference depthAttachmentRef = {};
+		depthAttachmentRef.attachment = 1;
+		depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
 		VkSubpassDescription subpass = {};
 		subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
 		subpass.colorAttachmentCount = 1;
 		subpass.pColorAttachments = &colorAttachmentRef;
+		subpass.pDepthStencilAttachment = &depthAttachmentRef;
 
 		VkSubpassDependency dependency = {};
 		dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
 		dependency.dstSubpass = 0;
-		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+		dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
 		dependency.srcAccessMask = 0;
-		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+		dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+		VkAttachmentDescription attachments[2] = { colorAttachment, depthAttachment };
 
 		VkRenderPassCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		createInfo.attachmentCount = 1;
-		createInfo.pAttachments = &colorAttachment;
+		createInfo.attachmentCount = 2; // testing
+		createInfo.pAttachments = attachments;
 		createInfo.subpassCount = 1;
 		createInfo.pSubpasses = &subpass;
 		createInfo.dependencyCount = 1;
@@ -385,29 +410,17 @@ namespace sge::vulkan
 			SGE_DEBUG_BREAKM("Failed to create Vulkan render pass.");
 	}
 
-	/*
-	void Instance::InitFramebuffers()
+	void Instance::InitDepthResources()
 	{
-		m_Framebuffers.resize(m_SwapchainImageViews.size());
+		uint32_t indices[2] = { m_QueueFamilyIndices.GraphicsFamily.value(), m_QueueFamilyIndices.PresentFamily.value() };
 
-		for (size_t i = 0; i < m_SwapchainImageViews.size(); i++)
-		{
-			VkImageView attachment = m_SwapchainImageViews[i];
+		VkFormat depthFormat = FindDepthFormat(m_PhysicalDevice);
+		CreateImage(m_Device, m_PhysicalDevice, m_Swapchain->GetExtent().width, m_Swapchain->GetExtent().height,
+			depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+			VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &m_DepthImage, &m_DepthImageMemory);
 
-			VkFramebufferCreateInfo createInfo = {};
-			createInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-			createInfo.renderPass = m_RenderPass;
-			createInfo.attachmentCount = 1;
-			createInfo.pAttachments = &attachment;
-			createInfo.width = m_SwapchainExtent.width;
-			createInfo.height = m_SwapchainExtent.height;
-			createInfo.layers = 1;
-
-			if (vkCreateFramebuffer(m_Device, &createInfo, nullptr, &m_Framebuffers[i]))
-				SGE_DEBUG_BREAKM("Failed to create Vulkan framebuffer.");
-		}
+		m_DepthImageView = CreateImageView(m_Device, m_DepthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
 	}
-	*/
 
 	void Instance::InitCommandPool()
 	{
@@ -442,33 +455,36 @@ namespace sge::vulkan
 		if (vkBeginCommandBuffer(commandBuffer, &cmdBeginInfo) != VK_SUCCESS)
 			SGE_DEBUG_BREAKM("Failed to begin recording Vulkan command buffer.");
 
+		VkClearValue clearValues[2] = {};
+		clearValues[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
+		clearValues[1].depthStencil = { 1.0f, 0 }; // testing
+
 		VkRenderPassBeginInfo renderBeginInfo = {};
 		renderBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
 		renderBeginInfo.renderPass = m_RenderPass;
 		renderBeginInfo.framebuffer = m_Swapchain->FramebufferAt(imageIndex);
 		renderBeginInfo.renderArea.offset = { 0, 0 };
 		renderBeginInfo.renderArea.extent = m_Swapchain->GetExtent();
-		VkClearValue clearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
-		renderBeginInfo.clearValueCount = 1;
-		renderBeginInfo.pClearValues = &clearColor;
+		renderBeginInfo.clearValueCount = 2;
+		renderBeginInfo.pClearValues = clearValues;
 
 		vkCmdBeginRenderPass(commandBuffer, &renderBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 		m_Pipeline->Bind(commandBuffer);
 		m_VertexBuffer->Bind(commandBuffer);
-		m_IndexBuffer->Bind(commandBuffer);
+		if (m_IndexBuffer)
+			m_IndexBuffer->Bind(commandBuffer);
 
 		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline->GetLayout(),
 			0, 1, &m_DescriptorSets[m_CurrentFrame], 0, nullptr);
 
-		m_Rotation0 = glm::rotate(m_Rotation0, 0.0002f, glm::vec3(0.0f, 0.0f, 1.0f)); // Temporary
-		m_Rotation1 = glm::rotate(m_Rotation1, 0.0003f, glm::vec3(0.0f, 0.0f, 1.0f)); // Temporary
-		m_Rotation2 = glm::rotate(m_Rotation2, 0.0004f, glm::vec3(0.0f, 0.0f, 1.0f)); // Temporary
-		m_Rotation3 = glm::rotate(m_Rotation3, 0.0005f, glm::vec3(0.0f, 0.0f, 1.0f)); // Temporary
-		auto matrix = glm::perspectiveRH(glm::half_pi<float>(), 800.0f / 600.0f, 0.0f, 10.0f);
-		vkCmdPushConstants(commandBuffer, m_Pipeline->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT, 0,
-			static_cast<uint32_t>(sizeof(glm::mat4)), glm::value_ptr(matrix));
-		//vkCmdDraw(commandBuffer, 3, 1, 0, 0);
-		vkCmdDrawIndexed(commandBuffer, 3, 4, 0, 0, 0);
+		vkCmdPushConstants(commandBuffer, m_Pipeline->GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+			static_cast<uint32_t>(sizeof(PushConstant)), &m_PushConstant);
+
+		constexpr uint32_t numInstances = 4;
+		if (m_IndicesCount > 0)
+			vkCmdDrawIndexed(commandBuffer, m_IndicesCount, numInstances, 0, 0, 0);
+		else
+			vkCmdDraw(commandBuffer, m_VerticesCount, numInstances, 0, 0);
 		vkCmdEndRenderPass(commandBuffer);
 
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
@@ -499,25 +515,72 @@ namespace sge::vulkan
 
 	void Instance::InitVertexBuffer()
 	{
-		float vertices[] = {
-			0.0f, -0.5f, 1.0f, 0.0f, 0.0f,
-			0.5f, 0.5f, 0.0f, 1.0f, 0.0f,
-			-0.5f, 0.5f, 0.0f, 0.0f, 1.0f
+		/*
+		constexpr float vertices[216] = {
+			//===== Vertices ====   ===== Normals ====	== Indices ==
+			 -0.5f,  0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 4
+			  0.5f, -0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 1
+			  0.5f,  0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 5
+			  0.5f, -0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 1
+			 -0.5f,  0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 4
+			 -0.5f, -0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 0
+
+			 -0.5f, -0.5f, -0.5f,	0.0f, -1.0f, 0.0f,	// 0
+			  0.5f, -0.5f,  0.5f,	0.0f, -1.0f, 0.0f,	// 2
+			  0.5f, -0.5f, -0.5f,	0.0f, -1.0f, 0.0f,	// 1
+			  0.5f, -0.5f,  0.5f,	0.0f, -1.0f, 0.0f,	// 2
+			 -0.5f, -0.5f, -0.5f,	0.0f, -1.0f, 0.0f,	// 0
+			 -0.5f, -0.5f,  0.5f,	0.0f, -1.0f, 0.0f,	// 3
+
+			 -0.5f,  0.5f, -0.5f,	-1.0f, 0.0f, 0.0f,	// 4
+			 -0.5f, -0.5f,  0.5f,	-1.0f, 0.0f, 0.0f,	// 3
+			 -0.5f, -0.5f, -0.5f,	-1.0f, 0.0f, 0.0f,	// 0
+			 -0.5f, -0.5f,  0.5f,	-1.0f, 0.0f, 0.0f,	// 3
+			 -0.5f,  0.5f, -0.5f,	-1.0f, 0.0f, 0.0f,	// 4
+			 -0.5f,  0.5f,  0.5f,	-1.0f, 0.0f, 0.0f,	// 7
+
+			  0.5f, 0.5f,  0.5f,	0.0f, 1.0f, 0.0f,	// 6
+			 -0.5f, 0.5f, -0.5f,	0.0f, 1.0f, 0.0f,	// 4
+			  0.5f, 0.5f, -0.5f,	0.0f, 1.0f, 0.0f,	// 5
+			 -0.5f, 0.5f, -0.5f,	0.0f, 1.0f, 0.0f,	// 4
+			  0.5f, 0.5f,  0.5f,	0.0f, 1.0f, 0.0f,	// 6
+			 -0.5f, 0.5f,  0.5f,	0.0f, 1.0f, 0.0f,	// 7
+
+			  0.5f,  0.5f,  0.5f,	1.0f, 0.0f, 0.0f,	// 6
+			  0.5f, -0.5f, -0.5f,	1.0f, 0.0f, 0.0f,	// 1
+			  0.5f, -0.5f,  0.5f,	1.0f, 0.0f, 0.0f,	// 2
+			  0.5f, -0.5f, -0.5f,	1.0f, 0.0f, 0.0f,	// 1
+			  0.5f,  0.5f,  0.5f,	1.0f, 0.0f, 0.0f,	// 6
+			  0.5f,  0.5f, -0.5f,	1.0f, 0.0f, 0.0f,	// 5
+
+			 -0.5f,  0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 7
+			  0.5f, -0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 2
+			 -0.5f, -0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 3
+			  0.5f, -0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 2
+			 -0.5f,  0.5f,  0.5f,	0.0f, 0.0f,	1.0f,	// 7
+			  0.5f,  0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 6
 		};
 
-		m_VertexBuffer = new VertexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, vertices, 15 * sizeof(float));
+		m_VertexBuffer = new VertexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, vertices, 6 * sizeof(float), 36);
+		m_VerticesCount = 36;
+		m_IndexBuffer = nullptr;
+		m_IndicesCount = 0;
+		*/
 
-		uint32_t indices[] = { 0, 1, 2 };
-		m_IndexBuffer = new IndexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, indices, 3 * sizeof(uint32_t));
+		auto [vertices, indices] = file::LoadOBJFile("E:/C++/sigma-engine/engine/res/meshes/stanford_bunny.txt", 6);
+		file::CalculateNormals(vertices, indices);
+		
+		m_VerticesCount = vertices.size() / 6 ;
+		m_VertexBuffer = new VertexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, vertices.data(), 6 * sizeof(float), m_VerticesCount);
+		m_IndicesCount = indices.size();
+		m_IndexBuffer = new IndexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, indices.data(), indices.size() * sizeof(uint32_t));
 	}
 
 	void Instance::InitUniformBuffers()
 	{
 		TestUniformBuffer uBuffer = {
-			m_Rotation0,
-			m_Rotation1,
-			m_Rotation2,
-			m_Rotation3
+			MakePerspective(glm::half_pi<float>(), 800.0f / 600.0f, 0.1f, 5.0f),
+			m_Rotation
 		};
 		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 			m_UniformBuffers[i] = new UniformBuffer(m_Device, m_PhysicalDevice, &uBuffer, UNIFORM_BUFFER_SIZE);
@@ -525,11 +588,11 @@ namespace sge::vulkan
 
 	void Instance::UpdateUniformBuffer(uint32_t index)
 	{
+		m_Rotation = glm::rotate(m_Rotation, 0.0002f, glm::vec3(0.0f, 1.0f, 0.0f));
+
 		TestUniformBuffer uBuffer = {
-			m_Rotation0,
-			m_Rotation1,
-			m_Rotation2,
-			m_Rotation3
+			MakePerspective(glm::half_pi<float>(), 800.0f / 600.0f, 0.1f, 5.0f),
+			m_Rotation
 		};
 		m_UniformBuffers[index]->Upload(m_Device, &uBuffer, UNIFORM_BUFFER_SIZE);
 	}

@@ -9,9 +9,13 @@
 #include <GLFW/glfw3.h>
 #include <glm/mat4x4.hpp>
 
+#include <imgui/imgui.h>
+
 #include <vector>
 #include <array>
 #include <memory>
+
+// TODO: Fix 'ReInitSwapchain'
 
 namespace sge::vulkan
 {
@@ -19,12 +23,20 @@ namespace sge::vulkan
 
 	struct TestUniformBuffer
 	{
-		glm::mat4 transform0;
-		glm::mat4 transform1;
-		glm::mat4 transform2;
-		glm::mat4 transform3;
+		glm::mat4 Projection;
+		glm::mat4 Rotation;
 	};
 	constexpr size_t UNIFORM_BUFFER_SIZE = sizeof(TestUniformBuffer);
+
+	struct PushConstant
+	{
+		float ks; // Specular reflection constant
+		float kd; // Diffuse reflection constant
+		float ka; // Ambient reflection constant
+		float a;  // Shininess constant
+		
+		float color[3];
+	};
 
 	class Instance
 	{
@@ -48,6 +60,8 @@ namespace sge::vulkan
 		Pipeline* m_Pipeline;
 		VertexBuffer* m_VertexBuffer;
 		IndexBuffer* m_IndexBuffer;
+		uint32_t m_VerticesCount; // TEMPORARY
+		uint32_t m_IndicesCount; // TEMPORARY
 		std::array<UniformBuffer*, MAX_FRAMES_IN_FLIGHT> m_UniformBuffers;
 		std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> m_DescriptorSetLayouts;
 		std::array<VkDescriptorSet, 2> m_DescriptorSets;
@@ -64,10 +78,13 @@ namespace sge::vulkan
 
 		uint32_t m_CurrentFrame;
 
-		glm::mat4 m_Rotation0;
-		glm::mat4 m_Rotation1;
-		glm::mat4 m_Rotation2;
-		glm::mat4 m_Rotation3;
+		// Depth resources
+		VkImage m_DepthImage;
+		VkDeviceMemory m_DepthImageMemory;
+		VkImageView m_DepthImageView;
+
+		glm::mat4 m_Rotation;
+		PushConstant m_PushConstant;
 	private:
 		void InitInstance();
 #ifdef SGE_USING_VALIDATION_LAYERS
@@ -79,6 +96,9 @@ namespace sge::vulkan
 		void InitRenderPass();
 		void InitGraphicsPipeline();
 		void InitCommandPool();
+
+		void InitDepthResources();
+
 		void InitVertexBuffer();
 		void InitUniformBuffers();
 		void InitDescriptorSets();
@@ -89,7 +109,7 @@ namespace sge::vulkan
 	public:
 		Instance(GLFWwindow* window);
 		~Instance();
-		void OnUpdate();
+		void DrawFrame();
 		void UpdateUniformBuffer(uint32_t index);
 		void ReInitSwapchain();
 
@@ -101,13 +121,18 @@ namespace sge::vulkan
 		inline const std::vector<const char*>& GetValidationLayers() const { return m_ValidationLayers; }
 #endif // SGE_USING_VALIDATION_LAYERS
 		inline void SetFramebufferResized() { m_Swapchain->SetFramebufferResized(true); }
-
+		
 		inline GLFWwindow* GetWindowHandle() const { return m_WindowHandle; }
 		inline VkDevice GetDevice() const { return m_Device; }
 		inline VkPhysicalDevice GetPhysicalDevice() const { return m_PhysicalDevice; }
 		inline VkExtent2D GetSwapchainExtent() const { return m_Swapchain->GetExtent(); }
 		inline VkRenderPass GetRenderPass() const { return m_RenderPass; }
 		inline VkSurfaceKHR GetSurface() const { return m_Surface; }
+		inline VkQueue GetGraphicsQueue() const { return m_GraphicsQueue; }
 		inline const QueueFamilyIndices& GetQueueFamilyIndices() const { return m_QueueFamilyIndices; }
+		inline uint32_t GetSwapchainImageCount() const { return m_Swapchain->GetImageCount(); }
+		inline VkDescriptorPool GetDescriptorPool() const { return m_DescriptorPool; }
+		inline VkCommandPool GetCommandPool() const { return m_CommandPool; }
+		inline PushConstant& GetPushConstant() { return m_PushConstant; }
 	};
 } // namespace sge::vulkan
