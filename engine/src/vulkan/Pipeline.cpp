@@ -69,8 +69,10 @@ namespace sge::vulkan
 		rasterizationInfo.depthBiasEnable = VK_FALSE;
 		rasterizationInfo.rasterizerDiscardEnable = VK_FALSE;
 		rasterizationInfo.cullMode = VK_CULL_MODE_BACK_BIT; // Enable backface culling
+		//rasterizationInfo.cullMode = VK_CULL_MODE_NONE;
 		rasterizationInfo.frontFace = VK_FRONT_FACE_CLOCKWISE;
 		rasterizationInfo.polygonMode = VK_POLYGON_MODE_FILL;
+		//rasterizationInfo.polygonMode = VK_POLYGON_MODE_LINE;
 		rasterizationInfo.lineWidth = 1.0f;
 
 		// Multisampling
@@ -79,10 +81,20 @@ namespace sge::vulkan
 		multisampleInfo.sampleShadingEnable = VK_FALSE;
 		multisampleInfo.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
 
+		// Depth stencil
+		VkPipelineDepthStencilStateCreateInfo depthStencilInfo = {};
+		depthStencilInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depthStencilInfo.depthTestEnable = VK_TRUE;
+		depthStencilInfo.depthWriteEnable = VK_TRUE;
+		depthStencilInfo.depthCompareOp = VK_COMPARE_OP_LESS;
+		depthStencilInfo.depthBoundsTestEnable = VK_FALSE;
+		//depthStencilInfo.minDepthBounds = 0.0f;
+		//depthStencilInfo.maxDepthBounds = 1.0f;
+		
 		// Blending
 		VkPipelineColorBlendAttachmentState blendAttachment = {};
 		blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-		blendAttachment.blendEnable = VK_FALSE; // No Blending for now
+		blendAttachment.blendEnable = VK_FALSE;
 
 		VkPipelineColorBlendStateCreateInfo blendInfo = {};
 		blendInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -119,10 +131,10 @@ namespace sge::vulkan
 		pipelineInfo.pInputAssemblyState = &inputAssemblyInfo;
 		pipelineInfo.pViewportState = &viewportInfo;
 		pipelineInfo.pRasterizationState = &rasterizationInfo;
-		pipelineInfo.pDynamicState = VK_NULL_HANDLE;
-		pipelineInfo.pDepthStencilState = VK_NULL_HANDLE;
 		pipelineInfo.pMultisampleState = &multisampleInfo;
+		pipelineInfo.pDepthStencilState = &depthStencilInfo;
 		pipelineInfo.pColorBlendState = &blendInfo;
+		pipelineInfo.pDynamicState = VK_NULL_HANDLE;
 		pipelineInfo.layout = m_Layout;
 		pipelineInfo.renderPass = renderPass;
 		pipelineInfo.subpass = 0;
