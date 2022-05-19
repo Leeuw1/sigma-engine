@@ -4,13 +4,14 @@
 
 #include <deque>
 
+// This style of Layers and Layer stack was inspired by Hazel
+
 namespace sge
 {
 	class Layer
 	{
 	public:
-		virtual void OnAttach() = 0;
-		virtual void OnDetach() = 0;
+		virtual ~Layer() = default;
 		virtual void OnUpdate() = 0;
 		virtual bool OnEvent(Event& event) = 0;
 	};
