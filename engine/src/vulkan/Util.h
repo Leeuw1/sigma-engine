@@ -2,6 +2,7 @@
 
 #include "base.h"
 
+#include <glm/mat4x4.hpp>
 #include <vulkan/vulkan.h>
 
 #include <vector>
@@ -48,7 +49,20 @@ namespace sge::vulkan
 	bool IsSuitablePhysicalDevice(VkPhysicalDevice device, VkSurfaceKHR surface,
 		const std::vector<const char*>& requiredExtensions, QueueFamilyIndices& queueFamilyIndices);
 	SwapchainSupportDetails QuerySwapchainSupport(VkPhysicalDevice device, VkSurfaceKHR surface);
-	
+	void CreateImage(VkDevice device, VkPhysicalDevice physicalDevice, uint32_t width, uint32_t height, VkFormat format, VkImageTiling tiling,
+		VkImageUsageFlags usageFlags, VkMemoryPropertyFlags memoryPropertyFlags, VkImage* image, VkDeviceMemory* deviceMemory);
+	VkImageView CreateImageView(VkDevice device, VkImage image, VkFormat format, VkImageAspectFlags aspectFlags);
+
 	std::vector<char> LoadShaderBinary(const std::string& filepath);
 	uint32_t FindMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags flags);
+	VkFormat FindSupportedFormat(VkPhysicalDevice physicalDevice, const std::vector<VkFormat>& formats, VkImageTiling tiling, VkFormatFeatureFlags featureFlags);
+	VkFormat FindDepthFormat(VkPhysicalDevice physicalDevice);
+	bool HasStencilComponent(VkFormat format);
+	void TransitionImageLayout(VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue, VkImage image,
+		VkFormat format, VkImageLayout oldLayout, VkImageLayout newLayout);
+
+	VkCommandBuffer BeginOneTimeCommandBuffer(VkDevice device, VkCommandPool commandPool);
+	void EndOneTimeCommandBuffer(VkDevice device, VkCommandPool commandPool, VkCommandBuffer commandBuffer, VkQueue queue);
+
+	glm::mat4 MakePerspective(float fovY, float aspect, float zNear, float zFar);
 } // namespace sge::vulkan
