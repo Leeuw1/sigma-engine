@@ -1,5 +1,6 @@
 #include "Application.h"
 #include "event/KeyEvent.h"
+#include "ImGuiLayer.h"
 
 #include <iostream>
 
@@ -10,6 +11,7 @@ namespace sge
 		m_Window.SetEventCallback(std::bind(Application::OnEvent_Static, this, std::placeholders::_1));
 		m_LayerStack.PushBack(new TestLayer("TEST LAYER 0"));
 		m_LayerStack.PushBack(new TestLayer("TEST LAYER 1"));
+		m_LayerStack.PushBack(new ImGuiLayer(m_Window.GetVulkanInstance()));
 	}
 
 	Application::~Application()
@@ -18,6 +20,7 @@ namespace sge
 
 	int Application::Run()
 	{
+
 		while (!m_Window.ShouldClose())
 		{
 			m_LayerStack.OnUpdate();

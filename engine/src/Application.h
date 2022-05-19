@@ -3,12 +3,9 @@
 #include "Window.h"
 #include "Layer.h"
 
-// Temporary
-#include <iostream>
-
 namespace sge
 {
-	class Application
+	class SGE_API Application
 	{
 	private:
 		Window m_Window;
@@ -31,6 +28,7 @@ namespace sge
 			: m_Name(std::move(name))
 		{
 		}
+		virtual ~TestLayer() override {}
 
 		virtual void OnUpdate() override {}
 		virtual bool OnEvent(Event& event) override
@@ -44,8 +42,5 @@ namespace sge
 
 			return true;
 		}
-
-		virtual void OnAttach() override {}
-		virtual void OnDetach() override {}
 	};
 } // namespace sge
