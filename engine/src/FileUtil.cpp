@@ -15,7 +15,7 @@ namespace sge::file
 		std::ifstream file(filepath);
 		SGE_ASSERTF(file.is_open(), "Could not open file '%s'.", filepath.c_str());
 
-		std::cout << "Parsing file '" << filepath << "'...\n";
+		SGE_INFOF("Parsing file '%s'...", filepath.c_str());
 
 		std::vector<float> vertices;
 		std::vector<uint32_t> indices;
@@ -42,7 +42,7 @@ namespace sge::file
 		for (size_t i = 0; i < floatsPerVertex - 3; i++)
 			vertices.push_back(0.0f);
 
-		std::cout << "Reading vertices...\n";
+		SGE_INFO("Reading vertices...");
 		for (;;)
 		{
 			file >> c;
@@ -57,7 +57,7 @@ namespace sge::file
 			for (size_t i = 0; i < floatsPerVertex - 3; i++)
 				vertices.push_back(0.0f);
 		}
-		std::cout << "Loaded vertices.\n";
+		SGE_TRACE("Loaded vertices.");
 
 		uint32_t v0, v1, v2;
 
@@ -65,15 +65,15 @@ namespace sge::file
 		file >> v0 >> v1 >> v2;
 		indices.insert(indices.end(), { v0 - 1, v1 - 1, v2 - 1 });
 
-		std::cout << "Reading indices...\n";
+		SGE_INFO("Reading indices...");
 		while (!file.eof())
 		{
 			file >> c >> v0 >> v1 >> v2;
 			// Indices are off by 1 in this file format
 			indices.insert(indices.end(), { v0 - 1, v1 - 1, v2 - 1 });
 		}
-		std::cout << "Loaded indices.\n";
-		std::cout << "Finished parsing file. " << vertices.size() / floatsPerVertex << " vertices, " << indices.size() << " indices.\n";
+		SGE_TRACE("Loaded indices.");
+		SGE_TRACEF("Finished parsing file. %d vertices, %d indices.", vertices.size() / floatsPerVertex, indices.size());
 
 		return { vertices, indices };
 	}
@@ -81,7 +81,7 @@ namespace sge::file
 	// This function assumes that vertices are in the format: Vertex{ float, float, float }, Normal{ float, float, float }
 	void CalculateNormals(std::vector<float>& vertices, const std::vector<uint32_t>& indices)
 	{
-		std::cout << "Calculating normals...\n";
+		SGE_INFO("Calculating normals...");
 
 		auto CalcNormals = [&](size_t startIndex, size_t endIndex)
 		{
@@ -130,8 +130,8 @@ namespace sge::file
 		std::jthread thread0(CalcNormals, 0, quarterVerticesCount);
 		std::jthread thread1(CalcNormals, quarterVerticesCount, 2 * quarterVerticesCount);
 		std::jthread thread2(CalcNormals, 2 * quarterVerticesCount, 3 * quarterVerticesCount);
-		std::jthread thread3(CalcNormals, 3 * quarterVerticesCount, verticesCount);
+		CalcNormals(3 * quarterVerticesCount, verticesCount);
 
-		std::cout << "Finished calculating normals.\n";
+		SGE_TRACE("Finished calculating normals.");
 	}
 } // namespace sge::file
