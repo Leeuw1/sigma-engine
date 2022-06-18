@@ -16,7 +16,8 @@ namespace sge
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
 		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 		GLFWwindow* windowHandle = glfwCreateWindow(windowWidth, windowHeight, "Sigma Game Engine", nullptr, nullptr);
-		std::cout << "Initializing Vulkan...\n";
+		SGE_ASSERTM(windowHandle, "Failed to create window.");
+		SGE_INFO("Initializing Vulkan...");
 		m_VulkanInstance = std::make_unique<vulkan::Instance>(windowHandle);
 		
 		glfwSetWindowUserPointer(windowHandle, this);
@@ -82,8 +83,7 @@ namespace sge
 	void Window::OnUpdate()
 	{
 		glfwPollEvents();
-		m_VulkanInstance->DrawFrame();
-		ImGuiPresent();
+		ImGuiPresent(); // TODO: Move this to renderer
 	}
 
 	void Window::OnFrameBufferResize()
