@@ -2,7 +2,7 @@
 
 #include "event/Event.h"
 
-#include <deque>
+#include <vector>
 
 // This style of Layers and Layer stack was inspired by Hazel
 
@@ -20,7 +20,7 @@ namespace sge
 	{
 	private:
 		// Layers should be allocated with operator new
-		std::deque<Layer*> m_Layers;
+		std::vector<Layer*> m_Layers;
 	public:
 		~LayerStack();
 		void PushFront(Layer* layer);

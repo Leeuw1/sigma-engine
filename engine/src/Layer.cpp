@@ -27,7 +27,7 @@ namespace sge
 
 	void LayerStack::PushFront(Layer* layer)
 	{
-		m_Layers.push_front(layer);
+		m_Layers.emplace(m_Layers.cbegin(), layer);
 	}
 
 	void LayerStack::PushBack(Layer* layer)
