@@ -1,33 +1,32 @@
 #include "Pipeline.h"
-#include "base.h"
 
 #include <glm/mat4x4.hpp>
 
 namespace sge::vulkan
 {
-	Pipeline::Pipeline(VkDevice device, VkRenderPass renderPass, VkShaderModule vertexShaderModule, VkShaderModule fragShaderModule,
-		Swapchain* swapchain, VertexBuffer* vertexBuffer, std::optional<std::array<VkDescriptorSetLayout, 2>> descriptorSetLayouts)
-		: m_PipelineHandle(nullptr), m_Layout(nullptr)
+	Pipeline::Pipeline(VkDevice device, VkRenderPass renderPass, Shader* shader, Swapchain* swapchain,
+		BufferLayout vertexBufferLayout, VkDescriptorSetLayout descriptorSetLayout)
+		: m_PipelineHandle(nullptr), m_Layout(nullptr), m_BufferLayout(vertexBufferLayout)
 	{
 		// Vertex shader stage
 		VkPipelineShaderStageCreateInfo vertexShaderStageInfo = {};
 		vertexShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		vertexShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
-		vertexShaderStageInfo.module = vertexShaderModule;
+		vertexShaderStageInfo.module = shader->m_VertShaderModule;
 		vertexShaderStageInfo.pName = "main";
 
 		// Fragment shader stage
 		VkPipelineShaderStageCreateInfo fragShaderStageInfo = {};
 		fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
 		fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-		fragShaderStageInfo.module = fragShaderModule;
+		fragShaderStageInfo.module = shader->m_FragShaderModule;
 		fragShaderStageInfo.pName = "main";
 
 		VkPipelineShaderStageCreateInfo shaderStageInfos[2] = { vertexShaderStageInfo, fragShaderStageInfo };
 
 		// Vertex input
-		auto vertexInputBinding = vertexBuffer->GetBindingDescription();
-		auto vertexInputAttributes = vertexBuffer->GetAttributeDescriptions();
+		auto vertexInputBinding = vertexBufferLayout.GetBindingDescription();
+		auto vertexInputAttributes = vertexBufferLayout.GetAttributeDescriptions();
 
 		VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
 		vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -90,7 +89,7 @@ namespace sge::vulkan
 		depthStencilInfo.depthBoundsTestEnable = VK_FALSE;
 		//depthStencilInfo.minDepthBounds = 0.0f;
 		//depthStencilInfo.maxDepthBounds = 1.0f;
-		
+
 		// Blending
 		VkPipelineColorBlendAttachmentState blendAttachment = {};
 		blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
@@ -106,22 +105,25 @@ namespace sge::vulkan
 		// Pipeline layout
 		VkPushConstantRange pushConstantRange = {};
 		pushConstantRange.offset = 0;
-		pushConstantRange.size = static_cast<uint32_t>(sizeof(glm::mat4));
-		pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		pushConstantRange.size = static_cast<uint32_t>(128);
+		pushConstantRange.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
 
 		VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
 		pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipelineLayoutInfo.pushConstantRangeCount = 1;
 		pipelineLayoutInfo.pPushConstantRanges = &pushConstantRange;
-		// TODO: Add arguments for this step
-		if (descriptorSetLayouts.has_value())
-		{
-			pipelineLayoutInfo.setLayoutCount = static_cast<uint32_t>(descriptorSetLayouts->size());
-			pipelineLayoutInfo.pSetLayouts = descriptorSetLayouts->data();
-		}
+		
+		pipelineLayoutInfo.setLayoutCount = MAX_FRAMES_IN_FLIGHT;
+		FrameGroup<VkDescriptorSetLayout> layouts;
+		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+			layouts[i] = descriptorSetLayout;
+		pipelineLayoutInfo.pSetLayouts = layouts.data();
 
 		if (vkCreatePipelineLayout(device, &pipelineLayoutInfo, nullptr, &m_Layout) != VK_SUCCESS)
-			SGE_DEBUG_BREAKM("Failed to create Vulkan pipeline layout.");
+		{
+			__debugbreak();
+			//SGE_DEBUG_BREAKM("Failed to create Vulkan pipeline layout.");
+		}
 
 		VkGraphicsPipelineCreateInfo pipelineInfo = {};
 		pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
@@ -142,7 +144,10 @@ namespace sge::vulkan
 		pipelineInfo.basePipelineIndex = -1;
 
 		if (vkCreateGraphicsPipelines(device, nullptr, 1, &pipelineInfo, nullptr, &m_PipelineHandle) != VK_SUCCESS)
-			SGE_DEBUG_BREAKM("Failed to create Vulkan graphics pipeline.");
+		{
+			__debugbreak();
+			//SGE_DEBUG_BREAKM("Failed to create Vulkan graphics pipeline.");
+		}
 	}
 
 	void Pipeline::Destroy(VkDevice device)

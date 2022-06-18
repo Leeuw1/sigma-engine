@@ -1,15 +1,12 @@
 #pragma once
 
 #include "base.h"
+#include "BufferLayout.h"
 
 #include <vulkan/vulkan.h>
 
-#include <array>
-
 namespace sge::vulkan
 {
-	constexpr uint32_t VERTEX_ATTRIB_COUNT = 2;
-
 	class Buffer
 	{
 	protected:
@@ -37,31 +34,38 @@ namespace sge::vulkan
 	class VertexBuffer : public Buffer
 	{
 	private:
-		size_t m_Stride;
+		BufferLayout m_Layout;
+		uint32_t m_Count;
 	public:
-		VertexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const float* vertexData, size_t stride, size_t count);
+		VertexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const float* vertexData,
+			size_t size, const BufferLayout& layout);
 		void Bind(VkCommandBuffer commandBuffer);
-		VkVertexInputBindingDescription GetBindingDescription() const;
-		std::array<VkVertexInputAttributeDescription, VERTEX_ATTRIB_COUNT> GetAttributeDescriptions() const;
+	public:
+		inline uint32_t GetCount() const { return m_Count; }
+		inline const BufferLayout* GetLayout() const { return &m_Layout; }
 	};
 
 	class IndexBuffer : public Buffer
 	{
+	private:
+		uint32_t m_Count;
 	public:
 		IndexBuffer(VkDevice device, VkPhysicalDevice physicalDevice, VkCommandPool commandPool, VkQueue transferQueue, const uint32_t* indexData, size_t size);
 		void Bind(VkCommandBuffer commandBuffer);
+	public:
+		inline uint32_t GetCount() const { return m_Count; }
 	};
 	
 	class UniformBuffer : public Buffer
 	{
-	private:
-		VkDescriptorSetLayout m_DescriptorSetLayout;
 	public:
 		UniformBuffer(VkDevice device, VkPhysicalDevice physicalDevice, const void* uniformData, size_t size);
-		void Destroy(VkDevice device);
 		void Upload(VkDevice device, const void* uniformData, size_t size);
-		inline VkDescriptorSetLayout GetDescriptorSetLayout() const { return m_DescriptorSetLayout; }
+	public:
+		inline size_t GetSize() const { return m_Size; }
+	private:
+		size_t m_Size;
 	};
 
-	VkDescriptorPool CreateDescriptorPool(VkDevice device, uint32_t descriptorCount);
+	VkDescriptorPool CreateDescriptorPool(VkDevice device);
 } // namespace sge::vulkan
