@@ -88,7 +88,6 @@ namespace sge::vulkan
 			std::cout << '\t' << e.extensionName << '\n';
 	}
 
-
 	bool CheckDeviceExtensionSupport(VkPhysicalDevice device, const std::vector<const char*>& extensions)
 	{
 		uint32_t extensionCount = 0;
@@ -167,7 +166,10 @@ namespace sge::vulkan
 			isSwapchainSuitable = !details.Formats.empty() && !details.PresentModes.empty();
 		}
 
-		if (indices.IsComplete() && isSwapchainSuitable)
+		VkPhysicalDeviceFeatures features;
+		vkGetPhysicalDeviceFeatures(device, &features);
+
+		if (indices.IsComplete() && isSwapchainSuitable && features.samplerAnisotropy)
 		{
 			queueFamilyIndices = indices;
 			return true;
@@ -253,6 +255,23 @@ namespace sge::vulkan
 			SGE_DEBUG_BREAKM("Failed to create Vulkan image view.");
 
 		return imageView;
+	}
+
+	void CopyBufferToImage(VkDevice device, VkCommandPool commandPool, VkQueue graphicsQueue, VkBuffer buffer, VkImage image, uint32_t width, uint32_t height)
+	{
+		VkCommandBuffer commandBuffer = BeginOneTimeCommandBuffer(device, commandPool);
+
+		VkBufferImageCopy imageCopy = {};
+		imageCopy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		imageCopy.imageSubresource.mipLevel = 0;
+		imageCopy.imageSubresource.baseArrayLayer = 0;
+		imageCopy.imageSubresource.layerCount = 1;
+		imageCopy.imageOffset = { 0, 0, 0 };
+		imageCopy.imageExtent = { width, height, 1 };
+
+		vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &imageCopy);
+
+		EndOneTimeCommandBuffer(device, commandPool, commandBuffer, graphicsQueue);
 	}
 
 	uint32_t FindMemoryType(VkPhysicalDevice physicalDevice, uint32_t typeFilter, VkMemoryPropertyFlags flags)
