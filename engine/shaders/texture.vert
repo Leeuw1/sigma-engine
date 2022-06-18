@@ -1,10 +1,11 @@
 #version 450
 
 layout(location = 0) in vec3 v_Position;
-layout(location = 1) in vec3 v_Normal;
+layout(location = 1) in vec2 v_TexCoord;
 
 layout(location = 0) out vec3 out_Position;
-layout(location = 1) out vec3 out_Normal;
+layout(location = 1) out vec2 out_TexCoord;
+layout(location = 2) out mat4 out_NormalTransform;
 
 layout(binding = 0) uniform UniformBuffer
 {
@@ -15,14 +16,13 @@ layout(binding = 0) uniform UniformBuffer
 
 void main()
 {
-	mat4 normalTransform = transpose(inverse(Model));
-	out_Normal = normalize(vec4(normalTransform * vec4(v_Normal, 1.0f)).xyz);
+	out_Position = v_Position;
+	out_TexCoord = v_TexCoord;
 
 	vec4 worldPos = Model * vec4(v_Position, 1.0f);
-	float xOffset = -2.0f + gl_InstanceIndex;
-	worldPos.x += xOffset;
-	worldPos.y += 0.5f;
-	worldPos.z += 2.0f;
+	worldPos.z += 4.0f;
 	out_Position = worldPos.xyz;
+	out_NormalTransform = transpose(inverse(Model));
+
 	gl_Position = Projection * View * worldPos;
 }
