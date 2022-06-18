@@ -3,6 +3,8 @@
 #include "Pipeline.h"
 #include "Swapchain.h"
 #include "Buffer.h"
+#include "Texture.h"
+#include "FrameGroup.h"
 #include "base.h"
 
 #define GLFW_INCLUDE_VULKAN
@@ -16,18 +18,10 @@
 #include <memory>
 
 // TODO: Fix 'ReInitSwapchain'
+// Maybe rename this class to 'GraphicsContext'
 
 namespace sge::vulkan
 {
-	constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
-
-	struct TestUniformBuffer
-	{
-		glm::mat4 Projection;
-		glm::mat4 Rotation;
-	};
-	constexpr size_t UNIFORM_BUFFER_SIZE = sizeof(TestUniformBuffer);
-
 	struct PushConstant
 	{
 		float ks; // Specular reflection constant
@@ -57,14 +51,16 @@ namespace sge::vulkan
 		
 		VkRenderPass m_RenderPass;
 		
-		Pipeline* m_Pipeline;
-		VertexBuffer* m_VertexBuffer;
-		IndexBuffer* m_IndexBuffer;
-		uint32_t m_VerticesCount; // TEMPORARY
-		uint32_t m_IndicesCount; // TEMPORARY
-		std::array<UniformBuffer*, MAX_FRAMES_IN_FLIGHT> m_UniformBuffers;
-		std::array<VkDescriptorSetLayout, MAX_FRAMES_IN_FLIGHT> m_DescriptorSetLayouts;
-		std::array<VkDescriptorSet, 2> m_DescriptorSets;
+		std::vector<Pipeline> m_Pipelines;
+		
+		//FrameGroup<UniformBuffer*> m_UniformBuffers;
+		//glm::mat4x4 m_Rotation;
+
+		// Use same layout for all the descriptor sets in the same framegroup
+		VkDescriptorSetLayout m_DescriptorSetLayout;
+		// In the future, make this an array of framegroups of descriptor sets
+		FrameGroup<VkDescriptorSet> m_DescriptorSets;
+
 		VkDescriptorPool m_DescriptorPool;
 		Swapchain* m_Swapchain;
 		
@@ -83,7 +79,6 @@ namespace sge::vulkan
 		VkDeviceMemory m_DepthImageMemory;
 		VkImageView m_DepthImageView;
 
-		glm::mat4 m_Rotation;
 		PushConstant m_PushConstant;
 	private:
 		void InitInstance();
@@ -94,26 +89,35 @@ namespace sge::vulkan
 		void InitPhysicalDevice();
 		void InitLogicalDevice();
 		void InitRenderPass();
-		void InitGraphicsPipeline();
 		void InitCommandPool();
 
 		void InitDepthResources();
 
-		void InitVertexBuffer();
-		void InitUniformBuffers();
-		void InitDescriptorSets();
 		void InitCommandBuffers();
 		void InitSyncObjects();
-	private:
-		void RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex);
 	public:
 		Instance(GLFWwindow* window);
 		~Instance();
-		void DrawFrame();
-		void UpdateUniformBuffer(uint32_t index);
+		void BeginRenderPass(VkCommandBuffer commandBuffer, uint32_t imageIndex);
+		void EndRenderPass(VkCommandBuffer commandBuffer);
+		//void DrawFrame();
+		void Present(uint32_t* imageIndex);
+		void DrawIndexed(VkCommandBuffer commandBuffer, uint32_t pipelineIndex, VertexBuffer* vertexBuffer, IndexBuffer* indexBuffer, Shader* shader,
+			uint32_t instanceCount);
+		uint32_t CreatePipeline(Shader* shader, const BufferLayout* layout);
 		void ReInitSwapchain();
+		uint32_t AcquireNextSwapchainImage();
 
-		VkShaderModule CreateShaderModule(const std::vector<char>& binary);
+		// Descriptor set functions
+		static void AddLayoutBindingUniformBuffer(std::vector<VkDescriptorSetLayoutBinding>& bindings);
+		static void AddLayoutBindingTexture(std::vector<VkDescriptorSetLayoutBinding>& bindings);
+		void AllocateDescriptorSets(std::vector<VkDescriptorSetLayoutBinding>& bindings);
+		void AddDescriptorWrite(std::vector<VkWriteDescriptorSet>& descriptorWrites, VkDescriptorBufferInfo* bufferInfo, uint32_t frameIndex);
+		void AddDescriptorWrite(std::vector<VkWriteDescriptorSet>& descriptorWrites, VkDescriptorImageInfo* imageInfo, uint32_t frameIndex);
+
+		// Note: 'GetBufferInfo' and 'GetImageInfo' return pointers which must be freed with 'delete'
+		VkDescriptorBufferInfo* GetBufferInfo(UniformBuffer* uniformBuffer);
+		VkDescriptorImageInfo* GetImageInfo(Texture* texture);
 	public:
 		inline VkInstance GetInstanceHandle() const { return m_InstanceHandle; }
 #ifdef SGE_USING_VALIDATION_LAYERS
@@ -134,5 +138,7 @@ namespace sge::vulkan
 		inline VkDescriptorPool GetDescriptorPool() const { return m_DescriptorPool; }
 		inline VkCommandPool GetCommandPool() const { return m_CommandPool; }
 		inline PushConstant& GetPushConstant() { return m_PushConstant; }
+		inline VkCommandBuffer GetCurrentCommandBuffer() const { return m_CommandBuffers[m_CurrentFrame]; }
+		inline uint32_t GetCurrentFrame() const { return m_CurrentFrame; }
 	};
 } // namespace sge::vulkan

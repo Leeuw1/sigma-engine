@@ -1,5 +1,7 @@
 #include "Instance.h"
 #include "FileUtil.h"
+#include "BufferLayout.h"
+#include "Shader.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -8,20 +10,22 @@
 
 #include <iostream>
 
-#define SGE_CALL_VERBOSE(func) func; std::cout << #func << '\n'
+#define SGE_CALL_VERBOSE(func) func; SGE_TRACE(#func)
 
 namespace sge::vulkan
 {
 	Instance::Instance(GLFWwindow* window)
-		: m_InstanceHandle(nullptr), m_WindowHandle(window), m_DebugMessenger(nullptr),
+		: m_InstanceHandle(nullptr), m_WindowHandle(window),
+#ifdef SGE_USING_VALIDATION_LAYERS
+		m_DebugMessenger(nullptr),
+#endif // SGE_USING_VALIDATION_LAYERS
 		m_Surface(nullptr), m_PhysicalDevice(nullptr), m_Device(nullptr), m_Swapchain(nullptr),
 		//m_FramebufferResized(false),
 		m_RenderPass(nullptr),
-		//m_Pipeline(nullptr), m_PipelineLayout(nullptr),
 		m_GraphicsQueue(nullptr), m_PresentQueue(nullptr), m_CommandPool(nullptr),
 		m_CurrentFrame(0),
-		m_Rotation(glm::scale(glm::identity<glm::mat4>(), glm::vec3(5.0f, 5.0f, 5.0f))),
-		m_PushConstant({ 1.0f, 1.0f, 1.0f, 1.0f, { 0.6f, 0.0f, 0.0f } })
+		m_PushConstant({ 1.0f, 1.0f, 1.0f, 1.0f, { 0.6f, 0.0f, 0.0f } }),
+		m_DescriptorSetLayout(nullptr)
 	{
 		SGE_CALL_VERBOSE(InitInstance());
 
@@ -30,26 +34,29 @@ namespace sge::vulkan
 #endif // SGE_USING_VALIDATION_LAYERS
 
 		SGE_CALL_VERBOSE(InitSurface());
-		
+
 		SGE_CALL_VERBOSE(InitPhysicalDevice());
+
+		VkPhysicalDeviceProperties properties;
+		vkGetPhysicalDeviceProperties(m_PhysicalDevice, &properties);
+		SGE_INFOF("Max push constant size: %u bytes.", properties.limits.maxPushConstantsSize);
+
 		SGE_CALL_VERBOSE(InitLogicalDevice());
 
 		m_Swapchain = new Swapchain(m_Device, m_Surface, m_WindowHandle, QuerySwapchainSupport(m_PhysicalDevice, m_Surface), m_QueueFamilyIndices);
-		std::cout << "Vulkan swap chain created.\n";
+		SGE_TRACE("Vulkan swap chain created.");
 		m_Swapchain->InitImageViews(m_Device);
-		std::cout << "Vulkan image views created.\n";
+		SGE_TRACE("Vulkan image views created.");
 		SGE_CALL_VERBOSE(InitRenderPass());
 
 		SGE_CALL_VERBOSE(InitCommandPool());
 		SGE_CALL_VERBOSE(InitDepthResources());
 
-		SGE_CALL_VERBOSE(InitVertexBuffer());
-		SGE_CALL_VERBOSE(InitUniformBuffers());
-		SGE_CALL_VERBOSE(InitDescriptorSets());
-		SGE_CALL_VERBOSE(InitGraphicsPipeline());
+		m_DescriptorPool = CreateDescriptorPool(m_Device);
+		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+			m_DescriptorSets[i] = nullptr;
 
-		m_Swapchain->InitFramebuffers(m_Device, m_RenderPass, m_DepthImageView);
-		std::cout << "Vulkan framebuffers created.\n";
+		m_Swapchain->SGE_CALL_VERBOSE(InitFramebuffers(m_Device, m_RenderPass, m_DepthImageView));
 		SGE_CALL_VERBOSE(InitCommandBuffers());
 
 		SGE_CALL_VERBOSE(InitSyncObjects());
@@ -59,28 +66,19 @@ namespace sge::vulkan
 	{
 		vkDeviceWaitIdle(m_Device);
 
-		m_Pipeline->Destroy(m_Device);
-		delete m_Pipeline;
+		for (auto& pipeline : m_Pipelines)
+			pipeline.Destroy(m_Device);
 
 		m_Swapchain->Destroy(m_Device);
 		delete m_Swapchain;
-
-		m_VertexBuffer->Destroy(m_Device);
-		delete m_VertexBuffer;
 
 		// Depth resources
 		vkDestroyImageView(m_Device, m_DepthImageView, nullptr);
 		vkDestroyImage(m_Device, m_DepthImage, nullptr);
 		vkFreeMemory(m_Device, m_DepthImageMemory, nullptr);
 
-		//m_IndexBuffer->Destroy(m_Device);
-		//delete m_IndexBuffer;
-
-		for (auto uniformBuffer : m_UniformBuffers)
-		{
-			uniformBuffer->Destroy(m_Device);
-			delete uniformBuffer;
-		}
+		vkDestroyDescriptorPool(m_Device, m_DescriptorPool, nullptr);
+		vkDestroyDescriptorSetLayout(m_Device, m_DescriptorSetLayout, nullptr);
 
 		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
@@ -101,7 +99,7 @@ namespace sge::vulkan
 		vkDestroyInstance(m_InstanceHandle, nullptr);
 	}
 
-	void Instance::DrawFrame()
+	uint32_t Instance::AcquireNextSwapchainImage()
 	{
 		vkWaitForFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame], VK_TRUE, UINT64_MAX);
 
@@ -110,21 +108,35 @@ namespace sge::vulkan
 		if (result == VK_ERROR_OUT_OF_DATE_KHR)
 		{
 			ReInitSwapchain();
-			return;
+			return UINT_MAX;
 		}
 		SGE_ASSERTM(result == VK_SUCCESS || result == VK_SUBOPTIMAL_KHR, "Failed to acquire swap chain image.");
-		
+
 		vkResetFences(m_Device, 1, &m_InFlightFences[m_CurrentFrame]);
 
-		vkResetCommandBuffer(m_CommandBuffers[m_CurrentFrame], 0);
-		RecordCommandBuffer(m_CommandBuffers[m_CurrentFrame], imageIndex);
+		return imageIndex;
+	}
 
-		UpdateUniformBuffer(m_CurrentFrame);
+	/*
+	void Instance::DrawFrame()
+	{
+		uint32_t imageIndex = AcquireNextSwapchainImage();
+
+		if (imageIndex == UINT_MAX)
+			return;
+
+		//UpdateUniformBuffer(m_CurrentFrame);
 
 		// ImGui
 		ImGui::Render();
 		ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(), m_CommandBuffers[m_CurrentFrame]);
 
+		Present(&imageIndex);
+	}
+	*/
+
+	void Instance::Present(uint32_t* imageIndex)
+	{
 		VkSubmitInfo submitInfo = {};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
@@ -136,7 +148,7 @@ namespace sge::vulkan
 		submitInfo.signalSemaphoreCount = 1;
 		submitInfo.pSignalSemaphores = &m_RenderFinishedSemaphores[m_CurrentFrame];
 
-		result = vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]);
+		VkResult result = vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, m_InFlightFences[m_CurrentFrame]);
 		if (result != VK_SUCCESS)
 			SGE_DEBUG_BREAKM("Failed to submit Vulkan draw command buffer.");
 
@@ -147,7 +159,7 @@ namespace sge::vulkan
 		presentInfo.pWaitSemaphores = &m_RenderFinishedSemaphores[m_CurrentFrame];
 		presentInfo.swapchainCount = 1;
 		presentInfo.pSwapchains = swapchains;
-		presentInfo.pImageIndices = &imageIndex;
+		presentInfo.pImageIndices = imageIndex;
 
 		result = vkQueuePresentKHR(m_PresentQueue, &presentInfo);
 		if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR || m_Swapchain->GetFramebufferResized())
@@ -160,14 +172,14 @@ namespace sge::vulkan
 
 		m_CurrentFrame = (m_CurrentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
-	
+
 	void Instance::InitInstance()
 	{
 		VkApplicationInfo appInfo = {};
 		appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-		appInfo.pApplicationName = "Sigma Game Engine";
+		appInfo.pApplicationName = "Sigma Game Engine Demo";
 		appInfo.applicationVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
-		appInfo.pEngineName = "No Engine";
+		appInfo.pEngineName = "Sigma Game Engine";
 		appInfo.engineVersion = VK_MAKE_API_VERSION(0, 1, 0, 0);
 		appInfo.apiVersion = VK_API_VERSION_1_3;
 
@@ -229,7 +241,7 @@ namespace sge::vulkan
 		vkEnumeratePhysicalDevices(m_InstanceHandle, &deviceCount, nullptr);
 		if (deviceCount == 0)
 			SGE_DEBUG_BREAKM("No GPUs with Vulkan support found.");
-		
+
 		std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
 		vkEnumeratePhysicalDevices(m_InstanceHandle, &deviceCount, physicalDevices.data());
 
@@ -264,6 +276,7 @@ namespace sge::vulkan
 		queueCreateInfos.push_back(presentQueueCreateInfo);
 
 		VkPhysicalDeviceFeatures features = {};
+		features.samplerAnisotropy = VK_TRUE;
 
 		VkDeviceCreateInfo deviceCreateInfo = {};
 		deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -275,8 +288,6 @@ namespace sge::vulkan
 #ifdef SGE_USING_VALIDATION_LAYERS
 		deviceCreateInfo.enabledLayerCount = static_cast<uint32_t>(m_ValidationLayers.size());
 		deviceCreateInfo.ppEnabledLayerNames = m_ValidationLayers.data();
-#else
-		deviceCreateInfo.enabledLayerCount = 0;
 #endif // SGE_USING_VALIDATION_LAYERS
 
 		if (vkCreateDevice(m_PhysicalDevice, &deviceCreateInfo, nullptr, &m_Device) != VK_SUCCESS)
@@ -288,6 +299,8 @@ namespace sge::vulkan
 
 	void Instance::ReInitSwapchain()
 	{
+		SGE_DEBUG_BREAK(); // TODO: Make this work
+
 		// If window is minimized, wait until it isn't
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(m_WindowHandle, &width, &height);
@@ -303,7 +316,7 @@ namespace sge::vulkan
 		m_Swapchain->Destroy(m_Device);
 
 		std::cout << "Recreating Vulkan swap chain...\n";
-		
+
 		delete m_Swapchain;
 		m_Swapchain = new Swapchain(m_Device, m_Surface, m_WindowHandle, QuerySwapchainSupport(m_PhysicalDevice, m_Surface), m_QueueFamilyIndices);
 
@@ -312,42 +325,18 @@ namespace sge::vulkan
 		InitRenderPass();
 		std::cout << "Vulkan render pass created.\n";
 
-		m_Pipeline->Destroy(m_Device);
-		delete m_Pipeline;
-		
+		for (auto& pipeline : m_Pipelines)
+			pipeline.Destroy(m_Device);
+
 		InitCommandPool();
 		std::cout << "Vulkan command pool created.\n";
 
-		InitUniformBuffers();
-
-		InitGraphicsPipeline();
-		std::cout << "Vulkan graphics pipeline created.\n";
-		
 		m_Swapchain->InitFramebuffers(m_Device, m_RenderPass, m_DepthImageView);
 		std::cout << "Vulkan framebuffers created.\n";
-		InitVertexBuffer();
-		std::cout << "Vulkan vertex buffer created.\n";
 		InitCommandBuffers();
 		std::cout << "Vulkan command buffer created.\n";
 		InitSyncObjects();
 		std::cout << "Vulkan semaphores and fences created.\n";
-	}
-
-	void Instance::InitGraphicsPipeline()
-	{
-		// Create shader stages
-		std::vector<char> vertexShaderBinary = LoadShaderBinary("E:/C++/sigma-engine/engine/shaders/phong.vert.spv");
-		std::cout << "Vertex shader binary size: " << vertexShaderBinary.size() << " bytes.\n";
-		std::vector<char> fragShaderBinary = LoadShaderBinary("E:/C++/sigma-engine/engine/shaders/phong.frag.spv");
-		std::cout << "Fragment shader binary size: " << fragShaderBinary.size() << " bytes.\n";
-
-		VkShaderModule vertexShaderModule = CreateShaderModule(vertexShaderBinary);
-		VkShaderModule fragShaderModule = CreateShaderModule(fragShaderBinary);
-		
-		m_Pipeline = new Pipeline(m_Device, m_RenderPass, vertexShaderModule, fragShaderModule, m_Swapchain, m_VertexBuffer, m_DescriptorSetLayouts);
-
-		vkDestroyShaderModule(m_Device, vertexShaderModule, nullptr);
-		vkDestroyShaderModule(m_Device, fragShaderModule, nullptr);
 	}
 
 	void Instance::InitRenderPass()
@@ -399,7 +388,7 @@ namespace sge::vulkan
 
 		VkRenderPassCreateInfo createInfo = {};
 		createInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-		createInfo.attachmentCount = 2; // testing
+		createInfo.attachmentCount = 2;
 		createInfo.pAttachments = attachments;
 		createInfo.subpassCount = 1;
 		createInfo.pSubpasses = &subpass;
@@ -447,8 +436,10 @@ namespace sge::vulkan
 			SGE_DEBUG_BREAKM("Failed to create Vulkan command buffer.");
 	}
 
-	void Instance::RecordCommandBuffer(VkCommandBuffer commandBuffer, uint32_t imageIndex)
+	void Instance::BeginRenderPass(VkCommandBuffer commandBuffer, uint32_t imageIndex)
 	{
+		vkResetCommandBuffer(m_CommandBuffers[m_CurrentFrame], 0);
+
 		VkCommandBufferBeginInfo cmdBeginInfo = {};
 		cmdBeginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 
@@ -457,7 +448,7 @@ namespace sge::vulkan
 
 		VkClearValue clearValues[2] = {};
 		clearValues[0].color = { 0.0f, 0.0f, 0.0f, 1.0f };
-		clearValues[1].depthStencil = { 1.0f, 0 }; // testing
+		clearValues[1].depthStencil = { 1.0f, 0 };
 
 		VkRenderPassBeginInfo renderBeginInfo = {};
 		renderBeginInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
@@ -469,26 +460,40 @@ namespace sge::vulkan
 		renderBeginInfo.pClearValues = clearValues;
 
 		vkCmdBeginRenderPass(commandBuffer, &renderBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
-		m_Pipeline->Bind(commandBuffer);
-		m_VertexBuffer->Bind(commandBuffer);
-		if (m_IndexBuffer)
-			m_IndexBuffer->Bind(commandBuffer);
+	}
 
-		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, m_Pipeline->GetLayout(),
-			0, 1, &m_DescriptorSets[m_CurrentFrame], 0, nullptr);
-
-		vkCmdPushConstants(commandBuffer, m_Pipeline->GetLayout(), VK_SHADER_STAGE_FRAGMENT_BIT, 0,
-			static_cast<uint32_t>(sizeof(PushConstant)), &m_PushConstant);
-
-		constexpr uint32_t numInstances = 4;
-		if (m_IndicesCount > 0)
-			vkCmdDrawIndexed(commandBuffer, m_IndicesCount, numInstances, 0, 0, 0);
-		else
-			vkCmdDraw(commandBuffer, m_VerticesCount, numInstances, 0, 0);
+	void Instance::EndRenderPass(VkCommandBuffer commandBuffer)
+	{
 		vkCmdEndRenderPass(commandBuffer);
-
+		
 		if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS)
 			SGE_DEBUG_BREAKM("Failed to record command buffer.");
+	}
+
+	void Instance::DrawIndexed(VkCommandBuffer commandBuffer, uint32_t pipelineIndex, VertexBuffer* vertexBuffer, IndexBuffer* indexBuffer, Shader* shader,
+		uint32_t instanceCount)
+	{
+		Pipeline* p = &m_Pipelines[pipelineIndex];
+
+		p->Bind(commandBuffer);
+		vertexBuffer->Bind(commandBuffer);
+		indexBuffer->Bind(commandBuffer);
+
+		vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, p->GetLayout(),
+			0, 1, &m_DescriptorSets[m_CurrentFrame], 0, nullptr);
+
+		vkCmdPushConstants(commandBuffer, p->GetLayout(), VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+			static_cast<uint32_t>(sizeof(PushConstant)), &m_PushConstant);
+
+		vkCmdDrawIndexed(commandBuffer, indexBuffer->GetCount(), instanceCount, 0, 0, 0);
+	}
+
+	uint32_t Instance::CreatePipeline(Shader* shader, const BufferLayout* layout)
+	{
+		uint32_t index = static_cast<uint32_t>(m_Pipelines.size());
+		m_Pipelines.emplace_back(m_Device, m_RenderPass, shader, m_Swapchain, *layout, m_DescriptorSetLayout);
+		
+		return index;
 	}
 
 	void Instance::InitSyncObjects()
@@ -513,135 +518,101 @@ namespace sge::vulkan
 		}
 	}
 
-	void Instance::InitVertexBuffer()
+	void Instance::AddLayoutBindingUniformBuffer(std::vector<VkDescriptorSetLayoutBinding>& bindings)
 	{
-		/*
-		constexpr float vertices[216] = {
-			//===== Vertices ====   ===== Normals ====	== Indices ==
-			 -0.5f,  0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 4
-			  0.5f, -0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 1
-			  0.5f,  0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 5
-			  0.5f, -0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 1
-			 -0.5f,  0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 4
-			 -0.5f, -0.5f, -0.5f,	0.0f, 0.0f, -1.0f,	// 0
+		VkDescriptorSetLayoutBinding binding = {};
+		binding.binding = static_cast<uint32_t>(bindings.size());
+		binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		binding.descriptorCount = 1;
+		binding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 
-			 -0.5f, -0.5f, -0.5f,	0.0f, -1.0f, 0.0f,	// 0
-			  0.5f, -0.5f,  0.5f,	0.0f, -1.0f, 0.0f,	// 2
-			  0.5f, -0.5f, -0.5f,	0.0f, -1.0f, 0.0f,	// 1
-			  0.5f, -0.5f,  0.5f,	0.0f, -1.0f, 0.0f,	// 2
-			 -0.5f, -0.5f, -0.5f,	0.0f, -1.0f, 0.0f,	// 0
-			 -0.5f, -0.5f,  0.5f,	0.0f, -1.0f, 0.0f,	// 3
-
-			 -0.5f,  0.5f, -0.5f,	-1.0f, 0.0f, 0.0f,	// 4
-			 -0.5f, -0.5f,  0.5f,	-1.0f, 0.0f, 0.0f,	// 3
-			 -0.5f, -0.5f, -0.5f,	-1.0f, 0.0f, 0.0f,	// 0
-			 -0.5f, -0.5f,  0.5f,	-1.0f, 0.0f, 0.0f,	// 3
-			 -0.5f,  0.5f, -0.5f,	-1.0f, 0.0f, 0.0f,	// 4
-			 -0.5f,  0.5f,  0.5f,	-1.0f, 0.0f, 0.0f,	// 7
-
-			  0.5f, 0.5f,  0.5f,	0.0f, 1.0f, 0.0f,	// 6
-			 -0.5f, 0.5f, -0.5f,	0.0f, 1.0f, 0.0f,	// 4
-			  0.5f, 0.5f, -0.5f,	0.0f, 1.0f, 0.0f,	// 5
-			 -0.5f, 0.5f, -0.5f,	0.0f, 1.0f, 0.0f,	// 4
-			  0.5f, 0.5f,  0.5f,	0.0f, 1.0f, 0.0f,	// 6
-			 -0.5f, 0.5f,  0.5f,	0.0f, 1.0f, 0.0f,	// 7
-
-			  0.5f,  0.5f,  0.5f,	1.0f, 0.0f, 0.0f,	// 6
-			  0.5f, -0.5f, -0.5f,	1.0f, 0.0f, 0.0f,	// 1
-			  0.5f, -0.5f,  0.5f,	1.0f, 0.0f, 0.0f,	// 2
-			  0.5f, -0.5f, -0.5f,	1.0f, 0.0f, 0.0f,	// 1
-			  0.5f,  0.5f,  0.5f,	1.0f, 0.0f, 0.0f,	// 6
-			  0.5f,  0.5f, -0.5f,	1.0f, 0.0f, 0.0f,	// 5
-
-			 -0.5f,  0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 7
-			  0.5f, -0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 2
-			 -0.5f, -0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 3
-			  0.5f, -0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 2
-			 -0.5f,  0.5f,  0.5f,	0.0f, 0.0f,	1.0f,	// 7
-			  0.5f,  0.5f,  0.5f,	0.0f, 0.0f, 1.0f,	// 6
-		};
-
-		m_VertexBuffer = new VertexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, vertices, 6 * sizeof(float), 36);
-		m_VerticesCount = 36;
-		m_IndexBuffer = nullptr;
-		m_IndicesCount = 0;
-		*/
-
-		auto [vertices, indices] = file::LoadOBJFile("E:/C++/sigma-engine/engine/res/meshes/stanford_bunny.txt", 6);
-		file::CalculateNormals(vertices, indices);
-		
-		m_VerticesCount = vertices.size() / 6 ;
-		m_VertexBuffer = new VertexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, vertices.data(), 6 * sizeof(float), m_VerticesCount);
-		m_IndicesCount = indices.size();
-		m_IndexBuffer = new IndexBuffer(m_Device, m_PhysicalDevice, m_CommandPool, m_GraphicsQueue, indices.data(), indices.size() * sizeof(uint32_t));
+		bindings.push_back(binding);
 	}
 
-	void Instance::InitUniformBuffers()
+	void Instance::AddLayoutBindingTexture(std::vector<VkDescriptorSetLayoutBinding>& bindings)
 	{
-		TestUniformBuffer uBuffer = {
-			MakePerspective(glm::half_pi<float>(), 800.0f / 600.0f, 0.1f, 5.0f),
-			m_Rotation
-		};
+		VkDescriptorSetLayoutBinding binding = {};
+		binding.binding = static_cast<uint32_t>(bindings.size());
+		binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		binding.descriptorCount = 1;
+		binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+		bindings.push_back(binding);
+	}
+
+	void Instance::AllocateDescriptorSets(std::vector<VkDescriptorSetLayoutBinding>& bindings)
+	{
+		VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+		layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layoutInfo.bindingCount = static_cast<uint32_t>(bindings.size());
+		layoutInfo.pBindings = bindings.data();
+
+		// TEMP
+		SGE_ASSERTM(!m_DescriptorSetLayout, "Only one descriptor set layout can be used currently.\n");
+
+		if (vkCreateDescriptorSetLayout(m_Device, &layoutInfo, nullptr, &m_DescriptorSetLayout) != VK_SUCCESS)
+			SGE_DEBUG_BREAKM("Failed to create Vulkan descriptor set layout.");
+
+		// Set all layouts to newly created one
+		FrameGroup<VkDescriptorSetLayout> layouts;
 		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-			m_UniformBuffers[i] = new UniformBuffer(m_Device, m_PhysicalDevice, &uBuffer, UNIFORM_BUFFER_SIZE);
-	}
-
-	void Instance::UpdateUniformBuffer(uint32_t index)
-	{
-		m_Rotation = glm::rotate(m_Rotation, 0.0002f, glm::vec3(0.0f, 1.0f, 0.0f));
-
-		TestUniformBuffer uBuffer = {
-			MakePerspective(glm::half_pi<float>(), 800.0f / 600.0f, 0.1f, 5.0f),
-			m_Rotation
-		};
-		m_UniformBuffers[index]->Upload(m_Device, &uBuffer, UNIFORM_BUFFER_SIZE);
-	}
-
-	void Instance::InitDescriptorSets()
-	{
-		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-			m_DescriptorSetLayouts[i] = m_UniformBuffers[i]->GetDescriptorSetLayout();
-
-		m_DescriptorPool = CreateDescriptorPool(m_Device, MAX_FRAMES_IN_FLIGHT);
+			layouts[i] = m_DescriptorSetLayout;
 
 		VkDescriptorSetAllocateInfo allocInfo = {};
 		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 		allocInfo.descriptorSetCount = MAX_FRAMES_IN_FLIGHT;
-		allocInfo.pSetLayouts = m_DescriptorSetLayouts.data();
+		allocInfo.pSetLayouts = layouts.data();
 		allocInfo.descriptorPool = m_DescriptorPool;
 
 		if (vkAllocateDescriptorSets(m_Device, &allocInfo, m_DescriptorSets.data()) != VK_SUCCESS)
 			SGE_DEBUG_BREAKM("Failed to allocate Vulkan descriptor sets.");
-
-		for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
-		{
-			VkDescriptorBufferInfo bufferInfo = {};
-			bufferInfo.buffer = m_UniformBuffers[i]->GetBufferHandle();
-			bufferInfo.offset = 0;
-			bufferInfo.range = UNIFORM_BUFFER_SIZE;
-
-			VkWriteDescriptorSet descriptorWrite = {};
-			descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-			descriptorWrite.dstSet = m_DescriptorSets[i];
-			descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-			descriptorWrite.descriptorCount = 1;
-			descriptorWrite.pBufferInfo = &bufferInfo;
-
-			vkUpdateDescriptorSets(m_Device, 1, &descriptorWrite, 0, nullptr);
-		}
 	}
 
-	VkShaderModule Instance::CreateShaderModule(const std::vector<char>& binary)
+	void Instance::AddDescriptorWrite(std::vector<VkWriteDescriptorSet>& descriptorWrites, VkDescriptorBufferInfo* bufferInfo,
+		uint32_t frameIndex)
 	{
-		VkShaderModuleCreateInfo createInfo = {};
-		createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-		createInfo.codeSize = binary.size();
-		createInfo.pCode = reinterpret_cast<const uint32_t*>(binary.data());
+		VkWriteDescriptorSet write = {};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.dstSet = m_DescriptorSets[frameIndex];
+		write.dstBinding = static_cast<uint32_t>(descriptorWrites.size());
+		write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		write.descriptorCount = 1;
+		write.pBufferInfo = bufferInfo;
 
-		VkShaderModule shaderModule;
-		if (vkCreateShaderModule(m_Device, &createInfo, nullptr, &shaderModule) != VK_SUCCESS)
-			SGE_DEBUG_BREAKM("Failed to create Vulkan shader module.");
+		descriptorWrites.push_back(write);
+	}
 
-		return shaderModule;
+	void Instance::AddDescriptorWrite(std::vector<VkWriteDescriptorSet>& descriptorWrites, VkDescriptorImageInfo* imageInfo,
+		uint32_t frameIndex)
+	{
+		VkWriteDescriptorSet write = {};
+		write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		write.dstSet = m_DescriptorSets[frameIndex];
+		write.dstBinding = static_cast<uint32_t>(descriptorWrites.size());
+		write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		write.descriptorCount = 1;
+		write.pImageInfo = imageInfo;
+
+		descriptorWrites.push_back(write);
+	}
+
+	VkDescriptorBufferInfo* Instance::GetBufferInfo(UniformBuffer* uniformBuffer)
+	{
+		VkDescriptorBufferInfo bufferInfo = {};
+		bufferInfo.buffer = uniformBuffer->GetBufferHandle();
+		bufferInfo.offset = 0;
+		bufferInfo.range = uniformBuffer->GetSize();
+
+		return new VkDescriptorBufferInfo(bufferInfo);
+	}
+
+	VkDescriptorImageInfo* Instance::GetImageInfo(Texture* texture)
+	{
+		VkDescriptorImageInfo imageInfo = {};
+		imageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		imageInfo.imageView = texture->GetImageView();
+		imageInfo.sampler = texture->GetSampler();
+
+		return new VkDescriptorImageInfo(imageInfo);
 	}
 } // namespace sge::vulkan
